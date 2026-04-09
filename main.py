@@ -7,9 +7,11 @@ AI-powered ad strategy generation for mobile app acquisition
 import os
 import json
 import logging
+import time
+from collections import defaultdict
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from fastapi import FastAPI, Depends, HTTPException, Header, status, APIRouter
+from fastapi import FastAPI, Depends, HTTPException, Header, Request, status, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from anthropic import AsyncAnthropic
@@ -34,6 +36,61 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ============================================================================
+# Rate Limiting & Usage Tracking (in-memory, resets on restart)
+# ============================================================================
+
+# Rate limit config
+RATE_LIMIT_REQUESTS = int(os.environ.get("RATE_LIMIT_REQUESTS", "20"))  # max requests
+RATE_LIMIT_WINDOW = int(os.environ.get("RATE_LIMIT_WINDOW", "3600"))  # per window (seconds)
+DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", "100"))  # max requests per day
+
+# Track requests per API key: {api_key: [(timestamp, endpoint), ...]}
+_request_log: Dict[str, list] = defaultdict(list)
+_daily_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
+
+def _clean_old_requests(api_key: str) -> None:
+    """Remove requests outside the rate limit window"""
+    cutoff = time.time() - RATE_LIMIT_WINDOW
+    _request_log[api_key] = [
+        (ts, ep) for ts, ep in _request_log[api_key] if ts > cutoff
+    ]
+
+
+def check_rate_limit(api_key: str, endpoint: str) -> None:
+    """Enforce rate limiting per API key"""
+    now = time.time()
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
+    # Clean old requests
+    _clean_old_requests(api_key)
+
+    # Check hourly rate limit
+    if len(_request_log[api_key]) >= RATE_LIMIT_REQUESTS:
+        window_min = RATE_LIMIT_WINDOW // 60
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded: {RATE_LIMIT_REQUESTS} requests per {window_min} minutes. Try again later.",
+        )
+
+    # Check daily limit
+    if _daily_counts[api_key][today] >= DAILY_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Daily limit exceeded: {DAILY_LIMIT} requests per day. Resets at midnight UTC.",
+        )
+
+    # Record the request
+    _request_log[api_key].append((now, endpoint))
+    _daily_counts[api_key][today] += 1
+
+    # Clean up old daily counts (keep last 7 days)
+    old_dates = [d for d in _daily_counts[api_key] if d < (datetime.utcnow().strftime("%Y-%m-%d"))]
+    for d in old_dates[:-7] if len(old_dates) > 7 else []:
+        del _daily_counts[api_key][d]
+
+
 # Lazy-init Anthropic client (created on first request, not at import time)
 _anthropic_client = None
 
@@ -49,14 +106,19 @@ def get_anthropic_client() -> AsyncAnthropic:
 # ============================================================================
 
 
-async def verify_api_key(x_api_key: str = Header(...)) -> str:
-    """Verify API key from X-API-Key header"""
+async def verify_api_key(
+    request: Request, x_api_key: str = Header(...)
+) -> str:
+    """Verify API key and enforce rate limiting"""
     valid_key = os.environ.get("ADS_ENGINE_API_KEY", "sk_default_test_key")
     if x_api_key != valid_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key",
         )
+    # Enforce rate limiting on all authenticated requests
+    endpoint = request.url.path
+    check_rate_limit(x_api_key, endpoint)
     return x_api_key
 
 
@@ -1173,6 +1235,8 @@ async def root():
             "15. POST /api/v1/ads-quick": "Generate complete 1-hour campaign quick launch ready for deployment",
         },
         "authentication": "Use X-API-Key header with ADS_ENGINE_API_KEY environment variable",
+        "rate_limits": f"{RATE_LIMIT_REQUESTS} requests/hour, {DAILY_LIMIT} requests/day",
+        "usage": "GET /api/v1/usage (requires API key)",
         "health": "/health",
     }
 
@@ -1185,7 +1249,49 @@ async def root():
 @app.get("/health", tags=["Health"])
 async def health_check():
     """Service health check endpoint"""
-    return {"status": "healthy", "service": "FastAI Ads Engine API"}
+    return {
+        "status": "healthy",
+        "service": "FastAI Ads Engine API",
+        "rate_limits": {
+            "requests_per_hour": RATE_LIMIT_REQUESTS,
+            "requests_per_day": DAILY_LIMIT,
+        },
+    }
+
+
+@app.get("/api/v1/usage", tags=["Usage"], summary="Check API usage stats")
+async def get_usage(api_key: str = Depends(verify_api_key)):
+    """
+    Returns current usage stats for your API key.
+    Includes hourly and daily request counts, remaining quota, and per-endpoint breakdown.
+    """
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    _clean_old_requests(api_key)
+
+    hourly_used = len(_request_log[api_key])
+    daily_used = _daily_counts[api_key][today]
+
+    # Per-endpoint breakdown for today
+    endpoint_counts: Dict[str, int] = defaultdict(int)
+    for ts, ep in _request_log[api_key]:
+        endpoint_counts[ep] += 1
+
+    return {
+        "api_key_prefix": api_key[:8] + "...",
+        "hourly": {
+            "used": hourly_used,
+            "limit": RATE_LIMIT_REQUESTS,
+            "remaining": max(0, RATE_LIMIT_REQUESTS - hourly_used),
+            "window_seconds": RATE_LIMIT_WINDOW,
+        },
+        "daily": {
+            "used": daily_used,
+            "limit": DAILY_LIMIT,
+            "remaining": max(0, DAILY_LIMIT - daily_used),
+            "date": today,
+        },
+        "endpoints_called_this_hour": dict(endpoint_counts),
+    }
 
 
 # ============================================================================
