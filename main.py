@@ -10,22 +10,48 @@ import logging
 import time
 from collections import defaultdict
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException, Header, Request, status, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from anthropic import AsyncAnthropic
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
+
+# Build / runtime metadata (Railway sets RAILWAY_GIT_COMMIT_SHA automatically)
+APP_VERSION = "1.0.1"
+COMMIT_SHA = (
+    os.environ.get("RAILWAY_GIT_COMMIT_SHA")
+    or os.environ.get("RENDER_GIT_COMMIT")
+    or os.environ.get("GIT_COMMIT_SHA")
+    or "unknown"
+)
+BOOT_TIME = datetime.now(timezone.utc).isoformat()
+PORT_BIND = int(os.environ.get("PORT", 8000))
+
+logger.info(
+    "Boot: FastAI Ads Engine v%s commit=%s port=%s host=0.0.0.0",
+    APP_VERSION, COMMIT_SHA[:8] if COMMIT_SHA != "unknown" else "unknown", PORT_BIND,
+)
 
 # Initialize FastAPI app
 app = FastAPI(
     title="FastAI Ads Engine API",
     description="Production-grade AI-powered ad strategy generation",
-    version="1.0.0",
+    version=APP_VERSION,
 )
+
+
+@app.on_event("startup")
+async def _on_startup() -> None:
+    """Loud startup log so Railway Deploy Logs prove the process is alive."""
+    logger.info("Startup complete — listening on 0.0.0.0:%s", PORT_BIND)
+    logger.info("Anthropic key present: %s", bool(os.environ.get("ANTHROPIC_API_KEY")))
 
 # Add CORS middleware
 app.add_middleware(
@@ -1252,10 +1278,25 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "FastAI Ads Engine API",
+        "version": APP_VERSION,
+        "commit": COMMIT_SHA[:8] if COMMIT_SHA != "unknown" else "unknown",
+        "boot_time": BOOT_TIME,
         "rate_limits": {
             "requests_per_hour": RATE_LIMIT_REQUESTS,
             "requests_per_day": DAILY_LIMIT,
         },
+    }
+
+
+@app.get("/version", tags=["Health"])
+async def version_info():
+    """Returns the deployed commit SHA and build metadata. Public, no auth."""
+    return {
+        "version": APP_VERSION,
+        "commit": COMMIT_SHA,
+        "boot_time": BOOT_TIME,
+        "anthropic_key_configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "port": PORT_BIND,
     }
 
 

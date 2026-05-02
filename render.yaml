@@ -1,0 +1,27 @@
+# Render.com deploy config — backup path if Railway stays broken.
+# Setup: render.com → New + → Web Service → connect GitHub repo
+#        → Render auto-detects this file and provisions everything.
+# After provisioning, go to Environment → add ANTHROPIC_API_KEY + ADS_ENGINE_API_KEY.
+services:
+  - type: web
+    name: fastai-ads-engine
+    runtime: python
+    plan: free                       # upgrade to 'starter' ($7/mo) for always-on
+    region: oregon                   # closest to existing api.exafabs.ai users
+    branch: master
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python main.py"
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.10
+      - key: ANTHROPIC_API_KEY
+        sync: false                  # set manually in Render dashboard
+      - key: ADS_ENGINE_API_KEY
+        sync: false
+      - key: RATE_LIMIT_REQUESTS
+        value: "20"
+      - key: RATE_LIMIT_WINDOW
+        value: "3600"
+      - key: DAILY_LIMIT
+        value: "100"
