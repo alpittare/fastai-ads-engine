@@ -1,10 +1,8 @@
-# Pin Python version for Railway/Nixpacks
-# Prevents "default Python version changed" silent breakage
+# Pin Python 3.11 for Railway/Nixpacks builds.
+# python311Full bundles pip, ssl, sqlite — required because plain `python311`
+# ships interpreter only and breaks `python -m pip` at install time.
+# We deliberately do NOT override [phases.install] or [start] so Nixpacks
+# uses its battle-tested Python defaults (pip install -r requirements.txt
+# + start command from Procfile / railway.toml).
 [phases.setup]
-nixPkgs = ["python311", "gcc"]
-
-[phases.install]
-cmds = ["python -m pip install --upgrade pip", "pip install -r requirements.txt"]
-
-[start]
-cmd = "python main.py"
+nixPkgs = ["python311Full", "gcc"]
