@@ -138,9 +138,26 @@ def get_anthropic_client() -> AsyncAnthropic:
 async def verify_api_key(
     request: Request, x_api_key: str = Header(...)
 ) -> str:
-    """Verify API key and enforce rate limiting"""
-    valid_key = os.environ.get("ADS_ENGINE_API_KEY", "sk_default_test_key")
-    if x_api_key != valid_key:
+    """
+    Verify API key and enforce rate limiting.
+
+    SECURITY: No fallback key. If ADS_ENGINE_API_KEY is unset, the service
+    refuses ALL authenticated requests with 503 (not 401), making it obvious
+    the service is misconfigured rather than silently accepting a default
+    that's visible in the public GitHub repo.
+    """
+    valid_key = os.environ.get("ADS_ENGINE_API_KEY")
+    if not valid_key:
+        logger.error(
+            "ADS_ENGINE_API_KEY env var is not set — refusing all auth attempts"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="API authentication not configured. Contact the operator.",
+        )
+    # Constant-time comparison to prevent timing attacks
+    import hmac
+    if not hmac.compare_digest(x_api_key, valid_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key",
@@ -1374,9 +1391,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    """Last-resort handler — log full traceback so Railway logs show real cause."""
+    """Last-resort handler — log full traceback so logs show real cause."""
     logger.error(
         "Unhandled %s on %s %s: %s\n%s",
         type(exc).__name__, request.method, request.url.path, exc,
@@ -1394,11 +1412,5 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 if __name__ == "__main__":
     import uvicorn
-
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port,
-        log_level="info",
-    )
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
