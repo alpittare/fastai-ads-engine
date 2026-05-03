@@ -1,4 +1,4 @@
-# FastAI Ads Engine API
+# Ads Engine API
 
 Production-grade FastAPI backend with **15 AI-powered advertising endpoints** for complete ad campaign automation.
 

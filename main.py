@@ -1,5 +1,5 @@
 """
-FastAPI Ads Engine Backend - Production-grade REST API
+Ads Engine API - Production-grade REST API (FastAPI)
 AI-powered ad strategy generation for mobile app acquisition
 15 AI-powered endpoints for complete ad campaign automation
 """
@@ -38,13 +38,13 @@ BOOT_TIME = datetime.now(timezone.utc).isoformat()
 PORT_BIND = int(os.environ.get("PORT", 8000))
 
 logger.info(
-    "Boot: FastAI Ads Engine v%s commit=%s port=%s host=0.0.0.0",
+    "Boot: Ads Engine v%s commit=%s port=%s host=0.0.0.0",
     APP_VERSION, COMMIT_SHA[:8] if COMMIT_SHA != "unknown" else "unknown", PORT_BIND,
 )
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="FastAI Ads Engine API",
+    title="Ads Engine API",
     description="Production-grade AI-powered ad strategy generation",
     version=APP_VERSION,
 )
@@ -1255,12 +1255,12 @@ app.include_router(router)
 @app.get("/", tags=["Info"])
 async def root():
     """
-    FastAI Ads Engine API - 15 AI-powered advertising endpoints
+    Ads Engine API - 15 AI-powered advertising endpoints
 
     All 15 endpoints are available for complete ad campaign automation.
     """
     return {
-        "service": "FastAI Ads Engine API",
+        "service": "Ads Engine API",
         "version": "1.0.0",
         "description": "Production-grade AI-powered ad strategy generation",
         "endpoints": {
@@ -1297,7 +1297,7 @@ async def health_check():
     """Service health check endpoint"""
     return {
         "status": "healthy",
-        "service": "FastAI Ads Engine API",
+        "service": "Ads Engine API",
         "version": APP_VERSION,
         "commit": COMMIT_SHA[:8] if COMMIT_SHA != "unknown" else "unknown",
         "boot_time": BOOT_TIME,
