@@ -13,8 +13,11 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException, Header, Request, status, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
 from anthropic import AsyncAnthropic
+import traceback
 
 # Configure logging
 logging.basicConfig(
@@ -1341,13 +1344,52 @@ async def get_usage(api_key: str = Depends(verify_api_key)):
 
 
 @app.exception_handler(HTTPException)
-async def http_exception_handler(request, exc):
-    """Handle HTTP exceptions"""
-    return {
-        "error": "error",
-        "message": exc.detail,
-        "code": exc.status_code,
-    }
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Handle HTTPException with proper JSONResponse (was returning bare dict -> 500)."""
+    logger.warning(
+        "HTTPException %s on %s %s: %s",
+        exc.status_code, request.method, request.url.path, exc.detail,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": "error", "message": exc.detail, "code": exc.status_code},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Surface Pydantic validation errors instead of swallowing them as 500."""
+    logger.warning(
+        "ValidationError on %s %s: %s",
+        request.method, request.url.path, exc.errors(),
+    )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "validation_error",
+            "message": "Request body failed validation",
+            "code": 422,
+            "details": exc.errors(),
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Last-resort handler — log full traceback so Railway logs show real cause."""
+    logger.error(
+        "Unhandled %s on %s %s: %s\n%s",
+        type(exc).__name__, request.method, request.url.path, exc,
+        traceback.format_exc(),
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_error",
+            "message": f"{type(exc).__name__}: {str(exc)[:200]}",
+            "code": 500,
+        },
+    )
 
 
 if __name__ == "__main__":
